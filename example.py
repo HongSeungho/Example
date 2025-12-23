@@ -2,7 +2,8 @@ import sys
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget,
                                QComboBox, QLabel, QLineEdit,
-                               QGridLayout, QVBoxLayout, QTabWidget)
+                               QGridLayout, QVBoxLayout, QTabWidget,
+                               QSpacerItem, QSizePolicy)
 
 # --- 커스텀 위젯 (기존 유지) ---
 class UnitLabel(QLabel):
@@ -135,6 +136,74 @@ class TemperatureConverter(BaseConverter):
         val_in_c = self.to_celsius(value, in_unit)
         return self.from_celsius(val_in_c, out_unit)
 
+# --- 3. 파이프 두께 계산 (공식 필요) ---
+class Thickness(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setup_ui()
+        self.signal_connections()
+
+    def setup_ui(self):
+        self.glayout = QGridLayout(self)
+        self.rowspacer = QSpacerItem(60, 20,
+                                  QSizePolicy.Policy.Expanding,
+                                  QSizePolicy.Policy.Minimum)
+        self.colspacer = QSpacerItem(520, 20,
+                                  QSizePolicy.Policy.Expanding,
+                                  QSizePolicy.Policy.Minimum)
+
+        self.label = UnitLabel("내부 압력 하의 직선 파이프 - t < D/6")
+        font = self.label.font()
+        font.setPointSize(14)
+        self.label.setFont(font)
+        self.glayout.addWidget(self.label, 0, 0)
+        self.glayout.addItem(self.rowspacer, 1, 0)
+        self.pressure_label = UnitLabel(
+                                "Internal Design Gage Pressure")
+        self.pressure_line = UnitLine()
+        self.pressure_unit = UnitLabel("MPa")
+        self.outdiameter_label = UnitLabel(
+                                "Outside Diameter of Pipe")
+        self.outdiameter_line = UnitLine()
+        self.outdiameter_unit = UnitLabel("Millimeter")
+        self.stress_label = UnitLabel(
+                                "Stress Value for Material")
+        self.stress_line = UnitLine()
+        self.stress_unit = UnitLabel("MPa")
+        self.quality_label = UnitLabel(
+                                "Quality Factor")
+        self.quality_line = UnitLine()
+        self.weld_label = UnitLabel(
+                                "Weld Joint Strength Reduction Factor")
+        self.weld_line = UnitLine()
+        self.coefficient_label = UnitLabel(
+                                "Coefficient")
+        self.coefficient_line = UnitLine()
+
+        self.glayout.addWidget(self.pressure_label, 2, 0)
+        self.glayout.addWidget(self.pressure_line, 2, 1)
+        self.glayout.addWidget(self.pressure_unit, 2, 2)
+        self.glayout.addWidget(self.outdiameter_label, 3, 0)
+        self.glayout.addWidget(self.outdiameter_line, 3, 1)
+        self.glayout.addWidget(self.outdiameter_unit, 3, 2)
+        self.glayout.addWidget(self.stress_label, 4, 0)
+        self.glayout.addWidget(self.stress_line, 4, 1)
+        self.glayout.addWidget(self.stress_unit, 4, 2)
+        self.glayout.addWidget(self.quality_label, 5, 0)
+        self.glayout.addWidget(self.quality_line, 5, 1)
+        self.glayout.addWidget(self.weld_label, 6, 0)
+        self.glayout.addWidget(self.weld_line, 6, 1)
+        self.glayout.addWidget(self.coefficient_label, 7, 0)
+        self.glayout.addWidget(self.coefficient_line, 7, 1)
+        self.glayout.addItem(self.colspacer, 0, 3)
+
+        # self.glayout.setColumnMinimumWidth(0, 240)
+        # self.glayout.setColumnMinimumWidth(1, 140)
+        # self.glayout.setColumnMinimumWidth(2, 160)
+        
+    def signal_connections(self):
+        pass
+
 # --- 메인 윈도우 ---
 class MainWindow(QMainWindow):
     def __init__(self, parent=None):
@@ -155,12 +224,14 @@ class MainWindow(QMainWindow):
         }
         volume_units = {
             "Milliliter": 0.000001, "Liter": 0.001, "Cubic Meter": 1.0,
-            "Cubic Inch": 0.0000163871, "US Gallon": 0.00378541,
-            "Cubic Foot": 0.0283168466
+            "Cubic Millimeter": 0.000000001, "Cubic Centimeter": 0.000001,
+            "Barrel(oil)": 0.1589872949, "CC": 0.000001, 
+            "Cubic Inch": 0.0000163871, "Cubic Foot": 0.0283168466,
+            "Cubic Yard": 0.764554858, "US Gallon": 0.0037854118,
         }
         weight_units = {
             "Milligram": 0.000001, "Gram": 0.001, "Kilogram": 1.0,
-            "Ton": 1000.0, "Ounce": 0.0283495, "Pound": 0.453592
+            "Ton": 1000.0, "Ounce": 0.0283495231, "Pound": 0.45359237
         }
         pressure_units = {
                 "Kilopascal": 0.001, "bar": 0.1, "Megapascal": 1.0,
@@ -209,27 +280,33 @@ class MainWindow(QMainWindow):
 
         # 메인 레이아웃 구성
         self.unit_container = QWidget()
-        self.layout = QVBoxLayout(self.unit_container)
+        self.unit_layout = QVBoxLayout(self.unit_container)
         
         # 변환기 인스턴스 추가 (RatioConverter 재사용)
-        self.layout.addWidget(RatioConverter("길이", length_units))
-        self.layout.addWidget(RatioConverter("넓이", area_units))
-        self.layout.addWidget(RatioConverter("부피", volume_units))
-        self.layout.addWidget(RatioConverter("무게", weight_units))
-        self.layout.addWidget(TemperatureConverter()) # 온도는 별도 클래스 사용
-        self.layout.addWidget(RatioConverter("압력", pressure_units))
-        self.layout.addWidget(RatioConverter("동적 유속", viscosity_d_units))
-        self.layout.addWidget(RatioConverter("정적 유속", viscosity_k_units))
-        self.layout.addWidget(RatioConverter("부피 유량", flow_v_units))
-        self.layout.addWidget(RatioConverter("질량 유량", flow_m_units))
+        self.unit_layout.addWidget(RatioConverter("길이", length_units))
+        self.unit_layout.addWidget(RatioConverter("넓이", area_units))
+        self.unit_layout.addWidget(RatioConverter("부피", volume_units))
+        self.unit_layout.addWidget(RatioConverter("무게", weight_units))
+        self.unit_layout.addWidget(TemperatureConverter()) # 온도는 별도 클래스 사용
+        self.unit_layout.addWidget(RatioConverter("압력", pressure_units))
+        self.unit_layout.addWidget(RatioConverter("동적 유속", viscosity_d_units))
+        self.unit_layout.addWidget(RatioConverter("정적 유속", viscosity_k_units))
+        self.unit_layout.addWidget(RatioConverter("부피 유량", flow_v_units))
+        self.unit_layout.addWidget(RatioConverter("질량 유량", flow_m_units))
         
-        # UI 마무으리
-        self.layout.addStretch() # 아래 공간 채우기
+        # UI 마무리
+        self.unit_layout.addStretch() # 아래 공간 채우기
         
+        self.thickness_container = QWidget()
+        self.thickness_unit_layout = QVBoxLayout(self.thickness_container)
+        self.thickness_unit_layout.addWidget(Thickness())
+
+        self.thickness_unit_layout.addStretch()
+
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabPosition(QTabWidget.TabPosition.South)
         self.tab_widget.addTab(self.unit_container, "단위 환산")
-        #self.tab_widget.addTab("배관 두께 계산")
+        self.tab_widget.addTab(self.thickness_container, "배관 두께 계산")
         
         self.setCentralWidget(self.tab_widget)
         # 창 크기 자동 조절 (내용물에 맞게)
