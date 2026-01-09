@@ -1,72 +1,166 @@
-import sys
+import sys, os
+import json
+from typing import Dict, List, Tuple
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget,
-                               QComboBox, QLabel, QLineEdit,
+                               QComboBox, QLabel, QLineEdit, QTableWidget,
                                QGridLayout, QVBoxLayout, QTabWidget,
-                               QSpacerItem, QSizePolicy)
+                               QSpacerItem, QSizePolicy, QTableWidgetItem,
+                               QHeaderView, QAbstractItemView,
+                               QStackedLayout, QHBoxLayout, QFrame)
 
-# --- 커스텀 위젯 (기존 유지) ---
+# --- 1. 상수 데이터 정의 (데이터와 로직 분리) ---
+UNIT_DATA = {
+    "길이": {
+        "mm": 0.001, "cm": 0.01, "m": 1.0, "km": 1000.0, "in": 0.0254,
+        "ft": 0.3048, "yd": 0.9144, "mi": 1609.344
+    },
+    "넓이": {
+        "mm²": 1e-6, "cm²": 0.0001, "m²": 1.0, "km²": 1e6,
+        "in²": 0.00064516, "ft²": 0.09290304,
+        "yd²": 0.83612736, "mi²": 2589988.110336
+    },
+    "부피": {
+        "Milliliter": 1e-6, "Liter": 0.001, "m³": 1.0, "mm³": 1e-9,
+        "cm³": 1e-6, "Barrel(oil)": 0.1589872949, "CC": 1e-6,
+        "in³": 0.0000163871, "ft³": 0.0283168466,
+        "yd³": 0.764554858, "US Gallon": 0.0037854118,
+    },
+    "무게": {
+        "Milligram": 1e-6, "Gram": 0.001, "Kilogram": 1.0,
+        "Ton": 1000.0, "Ounce": 0.0283495231, "Pound": 0.45359237
+    },
+    "압력": {
+        "Kilopascal": 0.001, "bar": 0.1, "Megapascal": 1.0,
+        "psi": 0.0068947573, "Standard Atmosphere": 0.101325,
+        "Newton/m²": 1e-6, "Newton/cm²": 0.01, "Newton/mm²": 1.0,
+        "kgf/m²": 0.00000980665, "kgf/cm²": 0.0980665, "kgf/mm²": 9.80665,
+        "Torr": 0.0001333224
+    },
+    "동적 유속": {
+        "mN·s/m²": 1.0, "Centipoise": 1.0, "mPa·s": 1.0
+    },
+    "정적 유속": {
+        "mm²/s": 1.0, "Centistokes": 1.0
+    },
+    "부피 유량": {
+        "cm³/s": 0.0036, "cm³/min": 0.00006, "cm³/hr": 1e-6,
+        "m³/s": 3600.0, "m³/min": 60.0, "m³/hr": 1.0,
+        "L/s": 3.6, "L/min": 0.06, "L/hr": 0.001,
+        "gal(US)/s": 13.627482, "gal(US)/min": 0.227124, "gal(US)/hr": 0.003785,
+        "barrel/s": 572.35426, "barrel/min": 9.539237, "barrel/hr": 0.158987
+    },
+    "질량 유량": {
+        "g/s": 3.6, "g/min": 0.06, "g/hr": 0.001,
+        "kg/s": 3600.0, "kg/min": 60.0, "kg/hr": 1.0,
+        "lb/s": 1632.9325, "lb/min": 27.21554, "lb/hr": 0.453592
+    }
+}
+
+# --- 2. 커스텀 UI 위젯 ---
 class UnitLabel(QLabel):
-    def __init__(self, text: str = " ", parent=None):
+    def __init__(self, text: str = " ", parent=None, bold: bool=False, font_size: int=0):
         super().__init__(text, parent)
         self.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         self.setContentsMargins(5, 0, 5, 0)
+        if bold:
+            style = "font-weight: bold;"
+            if font_size > 0:
+                style += f" font-size: {font_size}pt;"
+            self.setStyleSheet(style)
 
 class UnitLine(QLineEdit):
-    def __init__(self, default_text: str = "1", parent=None):
+    def __init__(self, default_text: str = "", parent=None):
         super().__init__(default_text, parent)
         self.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
 
 class UnitCombobox(QComboBox):
-    def __init__(self, units: list[str], parent=None):
+    def __init__(self, units: List[str], parent=None):
         super().__init__(parent)
         self.addItems(units)
 
-# --- 핵심: 모든 변환기의 부모 클래스 ---
-class BaseConverter(QWidget):
+# --- 3. 단위 변환기 로직 ---
+class BaseConverterWidget(QWidget):
     """모든 단위 변환 위젯의 기본이 되는 클래스"""
-    def __init__(self, title: str, units: list[str], parent=None):
+    def __init__(self, title: str, units: List[str], parent=None):
         super().__init__(parent)
         self.title = title
         self.unit_list = units
-        
         self.setup_ui()
         self.signal_connections()
-        
-        # 초기값 설정 시 로직 실행을 위해 강제 호출 하지 않고,
-        # LineEdit에 값을 넣어서 트리거 유도
-        self.input_lineedit.setText("1") 
+        self.input_lineedit.setText("1")
 
     def setup_ui(self):
-        self.glayout = QGridLayout(self)
-        
-        self.label = UnitLabel(self.title)
-        self.input_lineedit = UnitLine()
-        self.input_combobox = UnitCombobox(self.unit_list)
-        
-        self.output_label = UnitLabel("-")
-        self.output_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
-        self.output_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse | 
-            Qt.TextInteractionFlag.TextSelectableByKeyboard
-        )
-        
-        self.output_combobox = UnitCombobox(self.unit_list)
-        # 출력 콤보박스의 기본값을 리스트의 두 번째 항목으로 설정 (사용자 편의)
-        if len(self.unit_list) > 1:
-            self.output_combobox.setCurrentIndex(1)
+            # 메인 레이아웃 (여백 조절)
+            self.main_layout = QVBoxLayout(self)
+            self.main_layout.setContentsMargins(5, 5, 5, 5)
 
-        self.glayout.addWidget(self.label, 0, 0)
-        self.glayout.addWidget(self.input_lineedit, 0, 1)
-        self.glayout.addWidget(self.input_combobox, 0, 2)
-        self.glayout.addWidget(self.output_label, 0, 3)
-        self.glayout.addWidget(self.output_combobox, 0, 4)
+            # --- 카드 스타일 프레임 생성 ---
+            self.card_frame = QFrame()
+            self.card_frame.setStyleSheet("""
+                QFrame {
+                    background-color: transparent;
+                    border-radius: 10px;
+                    border: 1px solid #dee2e6;
+                }
+                QLabel { border: none; }
+                QLineEdit { border: 1px solid #ced4da; border-radius: 4px; padding: 2px; }
+                QComboBox { border: 1px solid #ced4da; border-radius: 4px; }
+            """)
+            
+            # 프레임 내부용 그리드 레이아웃
+            self.glayout = QGridLayout(self.card_frame)
+            self.glayout.setContentsMargins(15, 15, 15, 15)
+            self.glayout.setHorizontalSpacing(15)
 
-        self.glayout.setColumnMinimumWidth(0, 70)
-        self.glayout.setColumnMinimumWidth(1, 210)
-        self.glayout.setColumnMinimumWidth(2, 268)
-        self.glayout.setColumnMinimumWidth(3, 240)
-        self.glayout.setColumnMinimumWidth(4, 268)
+            # 구성 요소 생성
+            self.label = UnitLabel(self.title, bold=True)
+            self.label.setMinimumWidth(80)
+            
+            self.input_lineedit = UnitLine("1")
+            self.input_combobox = UnitCombobox(self.unit_list)
+            
+            self.output_label = UnitLabel("-")
+            self.output_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+            self.output_label.setStyleSheet("font-weight: bold; color: #d35400; font-size: 11pt; border: none;")
+            self.output_label.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse | 
+                Qt.TextInteractionFlag.TextSelectableByKeyboard
+            )
+            
+            self.output_combobox = UnitCombobox(self.unit_list)
+            if len(self.unit_list) > 1:
+                self.output_combobox.setCurrentIndex(1)
+
+            # 위젯 배치 (카드 프레임 내부 그리드에 배치)
+            self.glayout.addWidget(self.label, 0, 0)
+            self.glayout.addWidget(self.input_lineedit, 0, 1)
+            self.glayout.addWidget(self.input_combobox, 0, 2)
+            
+            # 화살표나 구분 기호 역할을 하는 라벨 추가 (선택 사항)
+            self.arrow_label = QLabel("▶")
+            self.arrow_label.setStyleSheet("color: #95a5a6; border: none;")
+            self.arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.glayout.addWidget(self.arrow_label, 0, 3)
+
+            self.glayout.addWidget(self.output_label, 0, 4)
+            self.glayout.addWidget(self.output_combobox, 0, 5)
+
+            # 열 비율 조정 (입력창과 결과창이 유연하게 늘어나도록)
+            self.glayout.setColumnStretch(1, 2)
+            self.glayout.setColumnStretch(2, 1)
+            self.glayout.setColumnStretch(4, 2)
+            self.glayout.setColumnStretch(5, 1)
+
+            self.glayout.setColumnMinimumWidth(0, 70)
+            self.glayout.setColumnMinimumWidth(1, 210)
+            self.glayout.setColumnMinimumWidth(2, 268)
+            self.glayout.setColumnMinimumWidth(4, 240)
+            self.glayout.setColumnMinimumWidth(5, 268)
+
+            # 카드 프레임을 메인 레이아웃에 추가
+            self.main_layout.addWidget(self.card_frame)
 
     def signal_connections(self):
         self.input_lineedit.textChanged.connect(self.update_conversion)
@@ -77,7 +171,7 @@ class BaseConverter(QWidget):
         """UI 입력을 읽어 변환 로직을 수행하고 결과를 출력"""
         input_text = self.input_lineedit.text()
         
-        if not input_text or input_text == "-" or input_text == ".":
+        if not input_text or input_text in ["-", "."]:
             self.output_label.setText("-")
             return
 
@@ -93,31 +187,27 @@ class BaseConverter(QWidget):
         except ValueError:
             self.output_label.setText("Error")
 
-    def calculate(self, value, in_unit, out_unit):
+    def calculate(self, value: float, in_unit: str, out_unit: str) -> float:
         """자식 클래스에서 반드시 오버라이딩 해야 함"""
         raise NotImplementedError("Subclasses must implement convert_logic")
 
-# --- 1. 비율 변환기 (길이, 넓이, 부피, 무게, 압력, 유속, 유량) ---
-class RatioConverter(BaseConverter):
+# --- 4. 비율 변환기 (길이, 넓이, 부피, 무게, 압력, 유속, 유량) ---
+class RatioConverterWidget(BaseConverterWidget):
     """단순 비율(Factor)로 변환하는 위젯"""
-    def __init__(self, title: str, unit_dict: dict, parent=None):
+    def __init__(self, title: str, unit_dict: Dict[str, float], parent=None):
         self.unit_dict = unit_dict
         # 부모 클래스 초기화 (키 값만 리스트로 전달)
         super().__init__(title, list(unit_dict.keys()), parent)
 
-    def calculate(self, value, in_unit, out_unit):
-        input_ratio = self.unit_dict[in_unit]
-        output_ratio = self.unit_dict[out_unit]
-        
+    def calculate(self, value: float, in_unit: str, out_unit: str) -> float:
         # Base 단위로 변환 후 목표 단위로 변환
-        return (value * input_ratio) / output_ratio
+        return (value * self.unit_dict[in_unit]) / self.unit_dict[out_unit]
 
-# --- 2. 온도 변환기 (공식 필요) ---
-class TemperatureConverter(BaseConverter):
+# --- 5. 온도 변환기 (공식 필요) ---
+class TemperatureConverterWidget(BaseConverterWidget):
     """온도 변환 위젯 (공식 사용)"""
     def __init__(self, parent=None):
-        units = ["Celsius", "Fahrenheit", "Kelvin"]
-        super().__init__("온도", units, parent)
+        super().__init__("온도", ["Celsius", "Fahrenheit", "Kelvin"], parent)
         self.input_lineedit.setText("0") # 온도는 0도부터 시작하는게 자연스러움
 
     def to_celsius(self, value: float, unit: str) -> float:
@@ -132,189 +222,228 @@ class TemperatureConverter(BaseConverter):
         elif unit == "Kelvin": return value + 273.15
         return value
 
-    def calculate(self, value, in_unit, out_unit):
-        val_in_c = self.to_celsius(value, in_unit)
-        return self.from_celsius(val_in_c, out_unit)
+    def calculate(self, value: float, in_unit: str, out_unit: str) -> float:
+        # 섭씨로 변환
+        celsius = value
+        if in_unit == "Fahrenheit":
+            celsius = (value -32) * 5 / 9
+        elif in_unit == "Kelvin":
+            celsius = value - 273.15
+        
+        # 목표 단위로 변환
+        if out_unit == "Celsius":
+            return celsius
+        elif out_unit == "Fahrenheit":
+            return (celsius * 9 / 5) + 32
+        elif out_unit == "Kelvin":
+            return celsius + 273.15
+        return celsius
 
-# --- 3. 파이프 두께 계산 (공식 필요) ---
-class Thickness(QWidget):
+# --- 6. 파이프 두께 계산 (공식 필요) ---
+class PipeThicknessWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.inputs = {}
         self.setup_ui()
-        self.signal_connections()
-
-    def setup_ui(self):
-        self.glayout = QGridLayout(self)
-        self.rowspacer = QSpacerItem(60, 20,
-                                  QSizePolicy.Policy.Expanding,
-                                  QSizePolicy.Policy.Minimum)
-        self.colspacer = QSpacerItem(520, 20,
-                                  QSizePolicy.Policy.Expanding,
-                                  QSizePolicy.Policy.Minimum)
-
-        self.label = UnitLabel("내부 압력 하의 직선 파이프 - t < D/6")
-        font = self.label.font()
-        font.setPointSize(14)
-        self.label.setFont(font)
-        self.glayout.addWidget(self.label, 0, 0)
-        self.glayout.addItem(self.rowspacer, 1, 0)
-        self.pressure_label = UnitLabel(
-                                "Internal Design Gage Pressure")
-        self.pressure_line = UnitLine()
-        self.pressure_unit = UnitLabel("MPa")
-        self.outdiameter_label = UnitLabel(
-                                "Outside Diameter of Pipe")
-        self.outdiameter_line = UnitLine()
-        self.outdiameter_unit = UnitLabel("Millimeter")
-        self.stress_label = UnitLabel(
-                                "Stress Value for Material")
-        self.stress_line = UnitLine()
-        self.stress_unit = UnitLabel("MPa")
-        self.quality_label = UnitLabel(
-                                "Quality Factor")
-        self.quality_line = UnitLine()
-        self.weld_label = UnitLabel(
-                                "Weld Joint Strength Reduction Factor")
-        self.weld_line = UnitLine()
-        self.coefficient_label = UnitLabel(
-                                "Coefficient")
-        self.coefficient_line = UnitLine()
-
-        self.glayout.addWidget(self.pressure_label, 2, 0)
-        self.glayout.addWidget(self.pressure_line, 2, 1)
-        self.glayout.addWidget(self.pressure_unit, 2, 2)
-        self.glayout.addWidget(self.outdiameter_label, 3, 0)
-        self.glayout.addWidget(self.outdiameter_line, 3, 1)
-        self.glayout.addWidget(self.outdiameter_unit, 3, 2)
-        self.glayout.addWidget(self.stress_label, 4, 0)
-        self.glayout.addWidget(self.stress_line, 4, 1)
-        self.glayout.addWidget(self.stress_unit, 4, 2)
-        self.glayout.addWidget(self.quality_label, 5, 0)
-        self.glayout.addWidget(self.quality_line, 5, 1)
-        self.glayout.addWidget(self.weld_label, 6, 0)
-        self.glayout.addWidget(self.weld_line, 6, 1)
-        self.glayout.addWidget(self.coefficient_label, 7, 0)
-        self.glayout.addWidget(self.coefficient_line, 7, 1)
-        self.glayout.addItem(self.colspacer, 0, 3)
-
-        # self.glayout.setColumnMinimumWidth(0, 240)
-        # self.glayout.setColumnMinimumWidth(1, 140)
-        # self.glayout.setColumnMinimumWidth(2, 160)
+        self.load_reference_data()
         
-    def signal_connections(self):
-        pass
+    def setup_ui(self):
+        layout = QGridLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(20)
+
+        # --- 왼쪽: 입력 영역 (카드 스타일) ---
+        input_group = QFrame()
+        input_group.setStyleSheet("""
+            QFrame {
+                background-color: transparent;
+                border-radius: 10px;
+                border: 1px solid #dee2e6;
+            }
+            QLabel { border: none; }
+            QLineEdit { border: 1px solid #ced4da; border-radius: 4px; padding: 5px; }
+        """)
+
+        # 입력 카드 내부 레이아웃
+        input_vbox = QVBoxLayout(input_group)
+        input_vbox.setContentsMargins(20, 20, 20, 20)
+
+        title_lbl = QLabel("Pipe Thickness Calculation")
+        title_lbl.setMinimumHeight(75)
+        title_lbl.setStyleSheet("font-size: 13pt; font-weight: bold; color: #d35400; margin-bottom: 10px;")
+        input_vbox.addWidget(title_lbl)
+
+        # 필드들을 담을 그리드
+        fields_grid = QGridLayout()
+        fields_grid.setVerticalSpacing(30) # 필드 간 간격 확보
+        fields_grid.setHorizontalSpacing(25) 
+
+        fields = [
+            ("pressure", "Design Pressure (P)", "MPa"),
+            ("diameter", "Outside Diameter (D)", "mm"),
+            ("stress", "Allowable Stress (S)", "MPa"),
+            ("quality", "Quality Factor (E)", ""),
+            ("weld", "Weld Joint Factor (W)", ""),
+            ("coeff", "Coefficient (Y)", ""),
+            ("corrosion", "Corrosion (C)", "mm")
+        ]
+
+        for i, (key, label, unit) in enumerate(fields):
+            lbl = QLabel(label)
+            lbl.setFont(QFont("Malgun Gothic", 11))
+            edit = UnitLine()
+            edit.setFixedHeight(30) # 입력창 높이 고정
+            edit.textChanged.connect(self.calculate)
+            self.inputs[key] = edit
+
+            fields_grid.addWidget(lbl, i, 0)
+            fields_grid.addWidget(edit, i, 1)
+            fields_grid.addWidget(QLabel(unit), i, 2)
+
+        input_vbox.addLayout(fields_grid)
+
+        # 결과 영역 (하단 고정 및 강조)
+        input_vbox.addStretch(1) # 입력 필드와 결과 사이 공간을 늘려줌
+
+        result_frame = QFrame()
+        result_frame.setStyleSheet("background-color: transparent; border-radius: 5px; border: 1px solid #e9ecef;")
+        res_layout = QHBoxLayout(result_frame)
+
+        min_thick = QLabel("Required Min. Thickness (t):")
+        min_thick.setStyleSheet("font: Malgun Gothic; font-weight: bold; font-size: 11; border:noe;")
+        self.res_label = QLabel("-")
+        self.res_label.setStyleSheet("font-size: 12pt; font-weight: bold; color: #d35400; border:none;")
+
+        res_layout.addWidget(min_thick)
+        res_layout.addStretch()
+        res_layout.addWidget(self.res_label)
+
+        input_vbox.addWidget(result_frame)
+
+        # --- 오른쪽: 참조 테이블 (시인성 개선) ---
+        self.table = QTableWidget()
+        self.table.setMinimumSize(150, 550)
+        self.table.setAlternatingRowColors(True) # 행 색상 교차
+        self.table.setStyleSheet("""
+            QTableWidget { 
+                gridline-color: #ecf0f1; 
+                background-color: transparent;
+                alternate-background-color: transparent;
+            }
+            QHeaderView::section { 
+                background-color: #34495e; 
+                color: white; 
+                padding: 5px;
+                font-weight: bold;
+            }
+        """)
+
+        self.selector = QComboBox()
+        self.selector.addItems(["Allowable Stress (S)", "Casting Quality (Ec)", "Longitudinal Weld Joints (Ej)", "Weld Joint (W)", "Coefficient (Y)"])
+        self.selector.currentIndexChanged.connect(self.update_table_view)
+
+        ref_data_sele = QLabel("Reference Data Selection:")
+        ref_data_sele.setStyleSheet("font-size: 11;")
+        ref_data_sele.setMinimumHeight(50)
+
+        right_layout = QVBoxLayout()
+        right_layout.addWidget(ref_data_sele)
+        right_layout.addWidget(self.selector)
+        right_layout.addWidget(self.table)
+
+        layout.addWidget(input_group, 0, 0)
+        layout.addLayout(right_layout, 0, 1)
+        layout.setColumnStretch(1, 2)
+        layout.setHorizontalSpacing(50)
+
+    def load_reference_data(self):
+        """JSON 파일에서 데이터를 한 번에 로드"""
+        # 파일이 없을 경우를 대비한 기본 데이터 구조
+        self.db = {"stress_data": [], "casting_data": [], "longitu_data": [], "weld_data": [], "coefficient_data": []}
+        if os.path.exists("piping_data.json"):
+            with open("piping_data.json", "r", encoding="utf-8") as f:
+                self.db = json.load(f)
+        self.update_table_view()
+
+    def update_table_view(self):
+        """콤보박스 선택에 따라 테이블 갱신 (리팩토링 핵심)"""
+        key_map = ["stress_data", "casting_data", "longitu_data", "weld_data", "coefficient_data"]
+        data = self.db.get(key_map[self.selector.currentIndex()], [])
+        
+        if not data: return
+
+        self.table.setRowCount(len(data))
+        self.table.setColumnCount(len(data[0]))
+        
+        for r, row_data in enumerate(data):
+            for c, value in enumerate(row_data):
+                item = QTableWidgetItem(str(value))
+                if r == 0: # 첫 줄 헤더 강조
+                    item.setBackground(QColor("#2c3e50"))
+                    item.setForeground(QColor("white"))
+                self.table.setItem(r, c, item)
+        
+        self.table.resizeColumnsToContents()
+        self.table.resizeRowsToContents()
+
+    def calculate(self):
+        # 기존 계산 로직과 동일하되, 시각적 피드백 추가
+        try:
+            P = float(self.inputs['pressure'].text() or 0)
+            D = float(self.inputs['diameter'].text() or 0)
+            S = float(self.inputs['stress'].text() or 0)
+            E = float(self.inputs['quality'].text() or 0)
+            W = float(self.inputs['weld'].text() or 0)
+            Y = float(self.inputs['coeff'].text() or 0)
+            C = float(self.inputs['corrosion'].text() or 0)
+
+            denominator = 2 * (S * E * W + P * Y)
+            if denominator <= 0: return
+
+            t = (P * D / denominator) + C
+            self.res_label.setText(f"{t:.4f} mm")
+        except:
+            self.res_label.setText("-")
 
 # --- 메인 윈도우 ---
 class MainWindow(QMainWindow):
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("배관 및 계장 계산 도구")
-        
-        # 데이터 정의
-        length_units = {
-            "Millimeter": 0.001, "Centimeter": 0.01, "Meter": 1.0,
-            "Kilometer": 1000.0, "Inch": 0.0254, "Foot": 0.3048,
-            "Yard": 0.9144, "Mile": 1609.344
-        }
-        area_units = {
-            "Square Millimeter": 0.000001, "Square Centimeter": 0.0001,
-            "Square Meter": 1.0, "Square Kilometer": 1000000.0,
-            "Square Inch": 0.00064516, "Square Foot": 0.09290304,
-            "Square Yard": 0.83612736, "Square Mile": 2589988.110336
-        }
-        volume_units = {
-            "Milliliter": 0.000001, "Liter": 0.001, "Cubic Meter": 1.0,
-            "Cubic Millimeter": 0.000000001, "Cubic Centimeter": 0.000001,
-            "Barrel(oil)": 0.1589872949, "CC": 0.000001, 
-            "Cubic Inch": 0.0000163871, "Cubic Foot": 0.0283168466,
-            "Cubic Yard": 0.764554858, "US Gallon": 0.0037854118,
-        }
-        weight_units = {
-            "Milligram": 0.000001, "Gram": 0.001, "Kilogram": 1.0,
-            "Ton": 1000.0, "Ounce": 0.0283495231, "Pound": 0.45359237
-        }
-        pressure_units = {
-                "Kilopascal": 0.001, "bar": 0.1, "Megapascal": 1.0,
-                "psi": 0.0068947573, "Standard Atmosphere": 0.101325,
-                "Newton/Square Meter": 0.000001,
-                "Newton/Square Centimeter": 0.01,
-                "Newton/Square Millimeter": 1.0,
-                "Kilogram-Force/Square Meter": 0.00000980665,
-                "Kilogram-Force/Square Centimeter": 0.0980665,
-                "Kilogram-Force/Square Millimeter": 9.80665,
-                "Torr": 0.0001333224
-        }
-        viscosity_d_units = {
-                "Millinewton Second/Square Meter": 1.0,
-                "Centipoise": 1.0,
-                "Millipascal Second": 1.0
-        }
-        viscosity_k_units = {
-                "Square Millimeter/Second": 1.0,
-                "Centistokes": 1.0
-        }
-        flow_v_units = {
-                "Cubic Centimeter/Second": 0.0036,
-                "Cubic Centimeter/Minute": 0.00006,
-                "Cubic Centimeter/Hour": 0.000001,
-                "Cubic Meter/Second": 3600.0,
-                "Cubic Meter/Minute": 60.0,
-                "Cubic Meter/Hour": 1.0,
-                "Liter/Second": 3.6,
-                "Liter/Minute": 0.06,
-                "Liter/Hour": 0.001,
-                "Gallon(US)/Second": 13.627482422,
-                "Gallon(US)/Minute": 0.227124707,
-                "Gallon(US)/Hour": 0.0037854118,
-                "Barrel/Second": 572.35426174,
-                "Barrel/Minute": 9.5392376957,
-                "Barrel/Hour": 0.1589872949
-        }
-        flow_m_units = {
-                "Gram/Second": 3.6, "Gram/Minute": 0.06,
-                "Gram/Hour": 0.001, "Kilogram/Second": 3600.0,
-                "Kilogram/Minute": 60.0, "Kilogram/Hour": 1.0,
-                "Pound/Second": 1632.932532, "Pound/Minute": 27.2155422,
-                "Pound/Hour": 0.45359237
-        }
+           super().__init__(parent)
+           self.setWindowTitle("배관 및 계장 계산 도구 - 베타")
+           self.resize(900, 700)
+           self.setup_ui()
 
-        # 메인 레이아웃 구성
-        self.unit_container = QWidget()
-        self.unit_layout = QVBoxLayout(self.unit_container)
+    def setup_ui(self):
+        # 1. 단위 환산 탭
+        unit_container = QWidget()
+        unit_layout = QVBoxLayout(unit_container)
         
-        # 변환기 인스턴스 추가 (RatioConverter 재사용)
-        self.unit_layout.addWidget(RatioConverter("길이", length_units))
-        self.unit_layout.addWidget(RatioConverter("넓이", area_units))
-        self.unit_layout.addWidget(RatioConverter("부피", volume_units))
-        self.unit_layout.addWidget(RatioConverter("무게", weight_units))
-        self.unit_layout.addWidget(TemperatureConverter()) # 온도는 별도 클래스 사용
-        self.unit_layout.addWidget(RatioConverter("압력", pressure_units))
-        self.unit_layout.addWidget(RatioConverter("동적 유속", viscosity_d_units))
-        self.unit_layout.addWidget(RatioConverter("정적 유속", viscosity_k_units))
-        self.unit_layout.addWidget(RatioConverter("부피 유량", flow_v_units))
-        self.unit_layout.addWidget(RatioConverter("질량 유량", flow_m_units))
+        # 데이터 딕셔너리를 순회하며 변환기 자동 생성
+        for title, units in UNIT_DATA.items():
+            unit_layout.addWidget(RatioConverterWidget(title, units))
         
-        # UI 마무리
-        self.unit_layout.addStretch() # 아래 공간 채우기
-        
-        self.thickness_container = QWidget()
-        self.thickness_unit_layout = QVBoxLayout(self.thickness_container)
-        self.thickness_unit_layout.addWidget(Thickness())
+        # 온도 변환기는 별도 추가 (공식이 다르므로)
+        unit_layout.addWidget(TemperatureConverterWidget())
+        unit_layout.addStretch() # 하단 공백
 
-        self.thickness_unit_layout.addStretch()
+        # 2. 배관 두께 계산 탭
+        thickness_container = QWidget()
+        thickness_layout = QVBoxLayout(thickness_container)
+        thickness_layout.addWidget(PipeThicknessWidget())
+        thickness_layout.addStretch()
 
+        # 탭 구성
         self.tab_widget = QTabWidget()
-        self.tab_widget.setTabPosition(QTabWidget.TabPosition.South)
-        self.tab_widget.addTab(self.unit_container, "단위 환산")
-        self.tab_widget.addTab(self.thickness_container, "배관 두께 계산")
+        self.tab_widget.addTab(unit_container, "단위 환산")
+        self.tab_widget.addTab(thickness_container, "배관 두께 계산")
         
-        self.setCentralWidget(self.tab_widget)
-        # 창 크기 자동 조절 (내용물에 맞게)
-        self.resize(800, 600)
+        self.setCentralWidget(self.tab_widget)  
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+
     window = MainWindow()
     window.show()
+
     sys.exit(app.exec())
