@@ -372,7 +372,9 @@ class PipeThicknessWidget(QWidget):
         key_map = ["stress_data", "casting_data", "longitu_data", "weld_data", "coefficient_data"]
         data = self.db.get(key_map[self.selector.currentIndex()], [])
         
-        if not data: return
+        if not data:
+            self.table.setRowCount(0)
+            return
 
         self.table.setRowCount(len(data))
         self.table.setColumnCount(len(data[0]))
@@ -416,43 +418,50 @@ class MainWindow(QMainWindow):
            self.setup_ui()
 
     def setup_ui(self):
-        # 1. 단위 환산 탭
-        unit_scroll = QScrollArea(widgetResizable=True)
-        unit_container = QWidget()
-        unit_container.setMinimumWidth(1050)
-        unit_layout = QVBoxLayout(unit_container)
-        
-        # 데이터 딕셔너리를 순회하며 변환기 자동 생성
-        for title, units in UNIT_DATA.items():
-            unit_layout.addWidget(RatioConverterWidget(title, units))
-        
-        # 온도 변환기는 별도 추가 (공식이 다르므로)
-        unit_layout.addWidget(TemperatureConverterWidget())
-        unit_layout.addStretch() # 하단 공백
-
-        unit_scroll.setWidget(unit_container)
-
-        # 2. 배관 두께 계산 탭
-        thickness_scroll = QScrollArea(widgetResizable=True)
-        thickness_container = QWidget()
-        thickness_container.setMinimumWidth(1050)
-        thickness_layout = QVBoxLayout(thickness_container)
-        thickness_layout.addWidget(PipeThicknessWidget())
-        thickness_layout.addStretch()
-
-        thickness_scroll.setWidget(thickness_container)
-
-        # 탭 구성
         self.tab_widget = QTabWidget()
-        self.tab_widget.addTab(unit_scroll, "단위 환산")
-        self.tab_widget.addTab(thickness_scroll, "배관 두께 계산")
+
+        # --- 탭 헬퍼 함수 ---
+        def create_scroll_tab(widget, min_w=1050):
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            # 가로 스크롤이 필요할 때 나타나도록 설정
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            
+            # 내부 컨테이너 위젯 생성
+            container = QWidget()
+            container.setMinimumWidth(min_w)
+            layout = QVBoxLayout(container)
+            layout.addWidget(widget)
+            layout.addStretch()
+            
+            scroll.setWidget(container)
+            return scroll
+
+        # 1. 단위 환산 위젯 그룹화
+        unit_group = QWidget()
+        unit_vbox = QVBoxLayout(unit_group)
+        for title, units in UNIT_DATA.items():
+            unit_vbox.addWidget(RatioConverterWidget(title, units))
+        unit_vbox.addWidget(TemperatureConverterWidget())
+
+        # 2. 배관 두께 위젯
+        thickness_group = PipeThicknessWidget()
+
+        # 스크롤 적용하여 탭 추가
+        self.tab_widget.addTab(create_scroll_tab(unit_group), "단위 환산")
+        self.tab_widget.addTab(create_scroll_tab(thickness_group), "배관 두께 계산")
         
-        self.setCentralWidget(self.tab_widget)  
+        self.setCentralWidget(self.tab_widget)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    dark = qdarktheme.load_stylesheet()
-    app.setStyleSheet(dark)
+
+    try:
+        qdarktheme.setup_theme("dark")
+    except AttributeError:
+        app.setStyleSheet(qdarktheme.load_stylesheet())
+
     #app.setStyle("Fusion")
 
     window = MainWindow()
